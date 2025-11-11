@@ -6,9 +6,13 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "eom-xml-updater",
 	"main": "src/index.ts",
+	"compatibility_flags": ["nodejs_compat"],
 	"compatibility_date": "2025-11-09",
 	"observability": {
-		"enabled": true
+		"enabled": true,
+	},
+	"vars": {
+		"XML_URL": "https://feeds.feedburner.com/cccm/KEwU",
 	},
 	/**
 	 * Smart Placement
@@ -41,8 +45,6 @@
 	 */
 	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 	"triggers": {
-		"crons": [
-			"* * * * *"
-		]
-	}
+		"crons": ["0 */12 * * *"],
+	},
 }

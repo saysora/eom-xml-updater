@@ -1,19 +1,44 @@
-/**
- * Welcome to Cloudflare Workers!
- *
- * This is a template for a Scheduled Worker: a Worker that can run on a
- * configurable interval:
- * https://developers.cloudflare.com/workers/platform/triggers/cron-triggers/
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Run `curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"` to see your Worker in action
- * - Run `npm run deploy` to publish your Worker
- *
- * Bind resources to your Worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+import axios from 'axios';
+import { XMLParser } from 'fast-xml-parser';
+import { Client } from 'pg';
+
+interface ItunesXMLItem {
+	title: string;
+	'itunes:author': string;
+	'itunes:summary': string;
+	'itunes:duration': string;
+	pubDate: string;
+	guid: string;
+}
+
+interface XMLItem {
+	title: string;
+	author: string;
+	description: string;
+	url: string;
+	duration: string;
+	durationSeconds: number;
+	pubDate: string;
+	formattedDate: string;
+	filename: string;
+}
+
+function parseSeconds(timeString: string) {
+	const [hours, minutes, seconds] = timeString.split(':');
+
+	if (!hours || !minutes || !seconds) {
+		throw new Error('Could not parse time string');
+	}
+
+	return parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+}
+
+function parseFileName(name: string) {
+	const filePieces = name.split('/');
+	const fileName = filePieces[filePieces.length - 1];
+
+	return fileName?.split('.')?.[0];
+}
 
 export default {
 	async fetch(req) {
@@ -26,15 +51,88 @@ export default {
 	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
 	// [[triggers]] configuration.
 	async scheduled(event, env, ctx): Promise<void> {
-		// A Cron Trigger can make requests to other endpoints on the Internet,
-		// publish to a Queue, query a D1 Database, and much more.
-		//
-		// We'll keep it simple and make an API call to a Cloudflare API:
-		let resp = await fetch('https://api.cloudflare.com/client/v4/ips');
-		let wasSuccessful = resp.ok ? 'success' : 'fail';
+		const xmlUrl = env.XML_URL;
 
-		// You could store this result in KV, write to a D1 Database, or publish to a Queue.
-		// In this template, we'll just log the result:
-		console.log(`trigger fired at ${event.cron}: ${wasSuccessful}`);
+		const { data } = await axios.get(xmlUrl);
+
+		const xmlParser = new XMLParser();
+
+		const feedJson = JSON.stringify(xmlParser.parse(data), null, 4);
+
+		let xmlItems = (JSON.parse(feedJson)?.rss?.channel?.item?.map((i: ItunesXMLItem) => {
+			const date = new Date(i.pubDate);
+			const formattedDate = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
+
+			const upgradedUrl = i.guid.replace('http', 'https');
+
+			return {
+				title: i.title,
+				author: i['itunes:author'],
+				description: i['itunes:summary'],
+				duration: i['itunes:duration'],
+				durationSeconds: parseSeconds(i['itunes:duration']),
+				url: upgradedUrl,
+				filename: parseFileName(upgradedUrl),
+				pubDate: i.pubDate,
+				formattedDate,
+			} as XMLItem;
+		}) ?? []) as XMLItem[];
+
+		xmlItems = xmlItems.sort((a, b) => {
+			const aDate = new Date(a?.pubDate).getTime();
+			const bDate = new Date(b?.pubDate).getTime();
+
+			return aDate - bDate;
+		});
+
+		const itemsToCheck = xmlItems.slice(xmlItems.length - 10);
+
+		if (!itemsToCheck.length) {
+			console.log('No items to parse');
+			return;
+		}
+
+		const sql = new Client({ connectionString: env.DB_URL });
+
+		await sql.connect();
+
+		const authorArr = await sql.query('SELECT id, name from author');
+		const authorMap: Record<string, number> = {};
+
+		for (const author of authorArr.rows) {
+			authorMap[author.name] = parseInt(author.id);
+		}
+
+		console.log(`Running cron for ${new Date().toDateString()}`);
+		for (const item of itemsToCheck) {
+			const result = await sql.query('SELECT * from item where filename = $1 AND pub_date = $2', [item.filename, item.formattedDate]);
+
+			if (result.rows?.[0]) {
+				console.log(`${item.filename} exists, skipping`);
+				continue;
+			}
+
+			console.log(`item ${item.title} does not exist, adding it now`);
+
+			const itemArgs = [
+				item.title,
+				item.description,
+				item.durationSeconds,
+				item.url,
+				item.formattedDate,
+				item.formattedDate,
+				authorMap[item.author],
+				item.filename,
+			];
+
+			try {
+				await sql.query(
+					'INSERT INTO item (title, description, duration, url, date, pub_date, author_id, filename) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+					itemArgs,
+				);
+			} catch (e) {
+				console.error('Could not write file data to db', e);
+			}
+		}
 	},
 } satisfies ExportedHandler<Env>;

@@ -9,7 +9,13 @@
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
+		"@types/pg": "^8.15.6",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.46.0"
+	},
+	"dependencies": {
+		"axios": "^1.13.2",
+		"fast-xml-parser": "^5.3.1",
+		"pg": "^8.16.3"
 	}
 }
