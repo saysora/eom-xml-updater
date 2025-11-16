@@ -18,6 +18,7 @@ interface XMLItem {
 	url: string;
 	duration: string;
 	durationSeconds: number;
+	url_type: string;
 	pubDate: string;
 	formattedDate: string;
 	filename: string;
@@ -40,6 +41,13 @@ function parseFileName(name: string) {
 	return fileName?.split('.')?.[0];
 }
 
+function parseFileType(name: string): string {
+	const filePieces = name.split('.');
+	const file_type = filePieces[filePieces.length - 1];
+
+	return file_type;
+}
+
 export default {
 	async fetch(req) {
 		const url = new URL(req.url);
@@ -51,87 +59,95 @@ export default {
 	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
 	// [[triggers]] configuration.
 	async scheduled(event, env, ctx): Promise<void> {
-		const xmlUrl = env.XML_URL;
+		const xmls = env.XML_URLS;
 
-		const { data } = await axios.get(xmlUrl);
+		for (const xml of xmls) {
+			const { data } = await axios.get(xml);
 
-		const xmlParser = new XMLParser();
+			const xmlParser = new XMLParser();
 
-		const feedJson = JSON.stringify(xmlParser.parse(data), null, 4);
+			const feedJson = JSON.stringify(xmlParser.parse(data), null, 4);
 
-		let xmlItems = (JSON.parse(feedJson)?.rss?.channel?.item?.map((i: ItunesXMLItem) => {
-			const date = new Date(i.pubDate);
-			const formattedDate = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
+			const xmlName = JSON.parse(feedJson)?.rss?.channel?.title;
 
-			const upgradedUrl = i.guid.replace('http', 'https');
+			console.info(`Processing items for ${xmlName}`);
 
-			return {
-				title: i.title,
-				author: i['itunes:author'],
-				description: i['itunes:summary'],
-				duration: i['itunes:duration'],
-				durationSeconds: parseSeconds(i['itunes:duration']),
-				url: upgradedUrl,
-				filename: parseFileName(upgradedUrl),
-				pubDate: i.pubDate,
-				formattedDate,
-			} as XMLItem;
-		}) ?? []) as XMLItem[];
+			let xmlItems = (JSON.parse(feedJson)?.rss?.channel?.item?.map((i: ItunesXMLItem) => {
+				const date = new Date(i.pubDate);
+				const formattedDate = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
 
-		xmlItems = xmlItems.sort((a, b) => {
-			const aDate = new Date(a?.pubDate).getTime();
-			const bDate = new Date(b?.pubDate).getTime();
+				const upgradedUrl = i.guid.replace('http', 'https');
 
-			return aDate - bDate;
-		});
+				return {
+					title: i.title,
+					author: i['itunes:author'],
+					description: i['itunes:summary'],
+					duration: i['itunes:duration'],
+					durationSeconds: parseSeconds(i['itunes:duration']),
+					url: upgradedUrl,
+					url_type: parseFileType(upgradedUrl),
+					filename: parseFileName(upgradedUrl),
+					pubDate: i.pubDate,
+					formattedDate,
+				} as XMLItem;
+			}) ?? []) as XMLItem[];
 
-		const itemsToCheck = xmlItems.slice(xmlItems.length - 10);
+			xmlItems = xmlItems.sort((a, b) => {
+				const aDate = new Date(a?.pubDate).getTime();
+				const bDate = new Date(b?.pubDate).getTime();
 
-		if (!itemsToCheck.length) {
-			console.log('No items to parse');
-			return;
-		}
+				return aDate - bDate;
+			});
 
-		const sql = new Client({ connectionString: env.DB_URL });
+			const itemsToCheck = xmlItems.slice(xmlItems.length - 10);
 
-		await sql.connect();
-
-		const authorArr = await sql.query('SELECT id, name from author');
-		const authorMap: Record<string, number> = {};
-
-		for (const author of authorArr.rows) {
-			authorMap[author.name] = parseInt(author.id);
-		}
-
-		console.log(`Running cron for ${new Date().toDateString()}`);
-		for (const item of itemsToCheck) {
-			const result = await sql.query('SELECT * from item where filename = $1 AND pub_date = $2', [item.filename, item.formattedDate]);
-
-			if (result.rows?.[0]) {
-				console.log(`${item.filename} exists, skipping`);
-				continue;
+			if (!itemsToCheck.length) {
+				console.log('No items to parse');
+				return;
 			}
 
-			console.log(`item ${item.title} does not exist, adding it now`);
+			const sql = new Client({ connectionString: env.DB_URL });
 
-			const itemArgs = [
-				item.title,
-				item.description,
-				item.durationSeconds,
-				item.url,
-				item.formattedDate,
-				item.formattedDate,
-				authorMap[item.author],
-				item.filename,
-			];
+			await sql.connect();
 
-			try {
-				await sql.query(
-					'INSERT INTO item (title, description, duration, url, date, pub_date, author_id, filename) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-					itemArgs,
-				);
-			} catch (e) {
-				console.error('Could not write file data to db', e);
+			const authorArr = await sql.query('SELECT id, name from author');
+			const authorMap: Record<string, number> = {};
+
+			for (const author of authorArr.rows) {
+				authorMap[author.name] = parseInt(author.id);
+			}
+
+			console.log(`Running cron for ${new Date().toDateString()}`);
+			for (const item of itemsToCheck) {
+				const result = await sql.query('SELECT * from item where filename = $1 AND pub_date = $2', [item.filename, item.formattedDate]);
+
+				if (result.rows?.[0]) {
+					console.log(`${item.filename} exists, skipping`);
+					continue;
+				}
+
+				console.log(`item ${item.title} does not exist, adding it now`);
+
+				const itemArgs = [
+					item.title,
+					item.description,
+					item.durationSeconds,
+					item.url,
+					item.formattedDate,
+					item.formattedDate,
+					authorMap[item.author],
+					item.filename,
+					item.url_type,
+				];
+
+				try {
+					await sql.query(
+						'INSERT INTO item (title, description, duration, url, date, pub_date, author_id, filename, url_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+						itemArgs,
+					);
+				} catch (e) {
+					console.error('Could not write file data to db', e);
+				}
 			}
 		}
 	},

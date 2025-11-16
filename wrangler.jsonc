@@ -12,7 +12,7 @@
 		"enabled": true,
 	},
 	"vars": {
-		"XML_URL": "https://feeds.feedburner.com/cccm/KEwU",
+		"XML_URLS": ["https://feeds.feedburner.com/cccm/KEwU", "https://feeds.feedburner.com/cccm/MZFU"],
 	},
 	/**
 	 * Smart Placement
