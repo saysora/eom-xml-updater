@@ -110,11 +110,20 @@ export default {
 
 			await sql.connect();
 
+			// Get the author for this podcast
 			const authorArr = await sql.query('SELECT id, name from author');
 			const authorMap: Record<string, number> = {};
 
 			for (const author of authorArr.rows) {
 				authorMap[author.name] = parseInt(author.id);
+			}
+
+			// Get the series this podcast is from
+			const seriesArr = await sql.query('SELECT id, title from series');
+			const seriesMap: Record<string, number> = {};
+
+			for (const series of seriesArr.rows) {
+				seriesMap[series.title] = parseInt(series.id);
 			}
 
 			console.log(`Running cron for ${new Date().toDateString()}`);
@@ -141,10 +150,22 @@ export default {
 				];
 
 				try {
-					await sql.query(
-						'INSERT INTO item (title, description, duration, url, date, pub_date, author_id, filename, url_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+					const studyInsert = await sql.query(
+						'INSERT INTO item (title, description, duration, url, date, pub_date, author_id, filename, url_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
 						itemArgs,
 					);
+
+					if (!studyInsert.rows.length) {
+						console.log('No rows inserted, so moving on');
+						return;
+					}
+
+					// Now we create the associated series item record
+					console.log(`Creating series relation to ${xmlName}`);
+					await sql.query('INSERT INTO series_item (series_id, item_id) VALUES ($1, $2) ON CONSTRAINT unique_series_and_item DO NOTHING', [
+						seriesMap[xmlName.trim()],
+						studyInsert.rows?.[0],
+					]);
 				} catch (e) {
 					console.error('Could not write file data to db', e);
 				}
