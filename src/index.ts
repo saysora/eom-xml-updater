@@ -7,8 +7,12 @@ interface ItunesXMLItem {
 	'itunes:author': string;
 	'itunes:summary': string;
 	'itunes:duration': string;
+	description?: string;
 	pubDate: string;
 	guid: string;
+	enclosure?: {
+		['@_url']?: string;
+	};
 }
 
 interface XMLItem {
@@ -24,11 +28,14 @@ interface XMLItem {
 	filename: string;
 }
 
+const wwk = 'Women Worth Knowing';
+
 function parseSeconds(timeString: string) {
+	timeString = String(timeString);
 	const [hours, minutes, seconds] = timeString.split(':');
 
 	if (!hours || !minutes || !seconds) {
-		throw new Error('Could not parse time string');
+		return parseInt(timeString);
 	}
 
 	return parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
@@ -64,7 +71,7 @@ export default {
 		for (const xml of xmls) {
 			const { data } = await axios.get(xml);
 
-			const xmlParser = new XMLParser();
+			const xmlParser = new XMLParser({ ignoreAttributes: false });
 
 			const feedJson = JSON.stringify(xmlParser.parse(data), null, 4);
 
@@ -72,25 +79,53 @@ export default {
 
 			console.info(`Processing items for ${xmlName}`);
 
-			let xmlItems = (JSON.parse(feedJson)?.rss?.channel?.item?.map((i: ItunesXMLItem) => {
-				const date = new Date(i.pubDate);
-				const formattedDate = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
+			let xmlItems: XMLItem[] = [];
 
-				const upgradedUrl = i.guid.replace('http', 'https');
+			if (xmlName.trim() === wwk) {
+				xmlItems =
+					JSON.parse(feedJson)?.rss?.channel?.item?.map((i: ItunesXMLItem) => {
+						const date = new Date(i.pubDate);
+						const formattedDate = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
 
-				return {
-					title: i.title,
-					author: i['itunes:author'],
-					description: i['itunes:summary'],
-					duration: i['itunes:duration'],
-					durationSeconds: parseSeconds(i['itunes:duration']),
-					url: upgradedUrl,
-					url_type: parseFileType(upgradedUrl),
-					filename: parseFileName(upgradedUrl),
-					pubDate: i.pubDate,
-					formattedDate,
-				} as XMLItem;
-			}) ?? []) as XMLItem[];
+						const upgradedUrl = i.enclosure?.['@_url']?.replace('http://', 'https://');
+
+						return {
+							title: i.title.trim(),
+							author: i['itunes:author'].trim(),
+							description: i.description?.trim(),
+							duration: i['itunes:duration'],
+							durationSeconds: parseSeconds(i['itunes:duration']),
+							url: upgradedUrl,
+							url_type: parseFileType(upgradedUrl ?? 'mp3'),
+							filename: parseFileName(upgradedUrl ?? ''),
+							pubDate: i.pubDate,
+							formattedDate,
+						};
+					}) ?? [];
+			} else {
+				xmlItems =
+					JSON.parse(feedJson)?.rss?.channel?.item?.map((i: ItunesXMLItem) => {
+						const date = new Date(i.pubDate);
+						const formattedDate = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
+
+						const upgradedUrl = i.guid.replace('http://', 'https://');
+
+						return {
+							title: i.title.trim(),
+							author: i['itunes:author'].trim(),
+							description: i['description']?.trim(),
+							duration: i['itunes:duration'],
+							durationSeconds: parseSeconds(i['itunes:duration']),
+							url: upgradedUrl,
+							url_type: parseFileType(upgradedUrl),
+							filename: parseFileName(upgradedUrl),
+							pubDate: i.pubDate,
+							formattedDate,
+						};
+					}) ?? [];
+			}
+
+			console.log();
 
 			xmlItems = xmlItems.sort((a, b) => {
 				const aDate = new Date(a?.pubDate).getTime();
@@ -136,24 +171,92 @@ export default {
 				}
 
 				console.log(`item ${item.title} does not exist, adding it now`);
+				let itemArgs: (string | number)[] = [];
+				let insertString = '';
 
-				const itemArgs = [
-					item.title,
-					item.description,
-					item.durationSeconds,
-					item.url,
-					item.formattedDate,
-					item.formattedDate,
-					authorMap[item.author],
-					item.filename,
-					item.url_type,
-				];
+				if (xmlName.trim() === wwk) {
+					const people = item.author.split(',');
+					const authors = people.map((p) => p.trim());
+
+					itemArgs = [
+						item.title,
+						item.description,
+						item.durationSeconds,
+						item.url,
+						item.formattedDate,
+						item.formattedDate,
+						authorMap['Cheryl Brodersen'],
+						item.filename,
+						item.url_type,
+						authors.filter((a) => a !== 'Cheryl Brodersen').join(', '),
+					];
+					insertString = `
+						INSERT INTO item
+							(
+								title,
+								description,
+								duration,
+								url,
+								date,
+								pub_date,
+								author_id,
+								filename,
+								url_type,
+								co_authors
+							) VALUES (
+								$1,
+								$2,
+								$3,
+								$4,
+								$5,
+								$6,
+								$7,
+								$8,
+								$9,
+								$10
+							) RETURNING id
+`;
+				} else {
+					itemArgs = [
+						item.title,
+						item.description,
+						item.durationSeconds,
+						item.url,
+						item.formattedDate,
+						item.formattedDate,
+						authorMap[item.author],
+						item.filename,
+						item.url_type,
+					];
+
+					insertString = `
+						INSERT INTO item
+							(
+								title,
+								description,
+								duration,
+								url,
+								date,
+								pub_date,
+								author_id,
+								filename,
+								url_type
+							) VALUES (
+								$1,
+								$2,
+								$3,
+								$4,
+								$5,
+								$6,
+								$7,
+								$8,
+								$9
+							) RETURNING id
+`;
+				}
 
 				try {
-					const studyInsert = await sql.query(
-						'INSERT INTO item (title, description, duration, url, date, pub_date, author_id, filename, url_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
-						itemArgs,
-					);
+					const studyInsert = await sql.query(insertString, itemArgs);
 
 					if (!studyInsert.rows.length) {
 						console.log('No rows inserted, so moving on');
@@ -162,10 +265,10 @@ export default {
 
 					// Now we create the associated series item record
 					console.log(`Creating series relation to ${xmlName}`);
-					await sql.query('INSERT INTO series_item (series_id, item_id) VALUES ($1, $2) ON CONSTRAINT unique_series_and_item DO NOTHING', [
-						seriesMap[xmlName.trim()],
-						studyInsert.rows?.[0],
-					]);
+					await sql.query(
+						'INSERT INTO series_item (series_id, item_id) VALUES ($1, $2) ON CONFLICT ON CONSTRAINT unique_series_and_item DO NOTHING',
+						[seriesMap[xmlName.trim()], studyInsert.rows?.[0].id],
+					);
 				} catch (e) {
 					console.error('Could not write file data to db', e);
 				}

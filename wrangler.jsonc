@@ -12,7 +12,11 @@
 		"enabled": true,
 	},
 	"vars": {
-		"XML_URLS": ["https://feeds.feedburner.com/cccm/KEwU", "https://feeds.feedburner.com/cccm/MZFU"],
+		"XML_URLS": [
+			"https://feeds.feedburner.com/cccm/KEwU",
+			"https://feeds.feedburner.com/cccm/MZFU",
+			"https://feeds.feedburner.com/WomenYouShouldKnow",
+		],
 	},
 	/**
 	 * Smart Placement
