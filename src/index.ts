@@ -125,8 +125,6 @@ export default {
 					}) ?? [];
 			}
 
-			console.log();
-
 			xmlItems = xmlItems.sort((a, b) => {
 				const aDate = new Date(a?.pubDate).getTime();
 				const bDate = new Date(b?.pubDate).getTime();
@@ -158,6 +156,9 @@ export default {
 			const seriesMap: Record<string, number> = {};
 
 			for (const series of seriesArr.rows) {
+				if (series.title == 'Back to Basics Radio') {
+					seriesMap['Back to Basics'] = parseInt(series.id);
+				}
 				seriesMap[series.title] = parseInt(series.id);
 			}
 
